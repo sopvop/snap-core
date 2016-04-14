@@ -11,17 +11,18 @@ import           Control.Applicative            (Alternative ((<|>)))
 import           Control.DeepSeq                (deepseq)
 import           Control.Exception              (ErrorCall (..), evaluate, throwIO)
 import           Control.Exception.Lifted       (Exception (fromException, toException), Handler (Handler), catch, catches, finally, throw)
-import           Control.Monad                  (Monad ((>>=), (>>), return), liftM, void)
+import           Control.Monad                  (Monad (return, (>>), (>>=)), liftM, void)
 import           Control.Monad.IO.Class         (MonadIO (liftIO))
 import           Data.ByteString                (ByteString)
 import qualified Data.ByteString.Char8          as S
 import           Data.IORef                     (atomicModifyIORef, newIORef, readIORef, writeIORef)
-import           Data.List                      (foldl')
+import           Data.List                      (foldl', length)
 import qualified Data.Map                       as Map
 import           Data.Maybe                     (Maybe (..), fromJust, maybe)
+import           Data.Text                      (Text)
 import qualified Data.Text                      as T
 import           Data.Typeable                  (Typeable)
-import           Prelude                        (Bool (..), Either (..), Eq (..), FilePath, IO, Int, Num (..), Show (..), const, either, error, filter, map, seq, snd, ($), ($!), (&&), (++), (.))
+import           Prelude                        (Bool (..), Either (..), Eq (..), FilePath, IO, Int, Num (..), Show (..), const, either, error, filter, map, print, seq, snd, ($), ($!), (&&), (++), (.))
 import           Snap.Internal.Core             (EscapeSnap (TerminateConnection), Snap, getParam, getPostParam, getQueryParam, runSnap)
 import           Snap.Internal.Http.Types       (Request (rqBody), Response, setHeader)
 import           Snap.Internal.Util.FileUploads (BadPartException (..), FileUploadException (..), PartDisposition (..), PartInfo (..), PolicyViolationException (..), allowWithMaximumSize, defaultUploadPolicy, disallow, doProcessFormInputs, fileUploadExceptionReason, getMaximumNumberOfFormInputs, getMinimumUploadRate, getMinimumUploadSeconds, getUploadTimeout, handleFileUploads, setMaximumFormInputSize, setMaximumNumberOfFormInputs, setMinimumUploadRate, setMinimumUploadSeconds, setProcessFormInputs, setUploadTimeout, toPartDisposition)
@@ -49,6 +50,7 @@ instance Exception TestException
 tests :: [Test]
 tests = [ testSuccess1
         , testSuccess2
+        , testRfc2231
         , testBadParses
         , testPerPartPolicyViolation1
         , testPerPartPolicyViolation2
@@ -152,6 +154,38 @@ testSuccess2 = testCase "fileUploads/success2" $
         liftIO $ assertEqual "num params" 4 n
 
     hndl' !ref !_ !_ = atomicModifyIORef ref (\x -> (x+1, ()))
+
+
+------------------------------------------------------------------------------
+testRfc2231 :: Test
+testRfc2231 = testCase "fileUploads/rfc2231" $
+               harness tmpdir hndl rfc2231TestBody
+
+  where
+    tmpdir = "tempdir1"
+
+    hndl = do
+        xs <- handleFileUploads tmpdir
+                                defaultUploadPolicy
+                                (const $ allowWithMaximumSize 300000)
+                               hndl'
+        liftIO $ print xs
+        liftIO $ assertEqual "Returned all files" 1 (length xs)
+        let [(fn, _, _, hdrs)] = xs
+
+        liftIO $ do
+            assertEqual "File name decoded from utf" fn rfc2231FileNameUtf8
+
+    f mp (fn, ct, x, hdrs) = Map.insert fn (ct,x,hdrs) mp
+
+    hndl' partInfo =
+        either throw
+               (\fp -> do
+                    x <- liftIO $ S.readFile fp
+                    let fn = fromJust $ partFileName partInfo
+                    let ct = partContentType partInfo
+                    let hdrs = partHeaders partInfo
+                    return (fn, ct, x, hdrs))
 
 
 ------------------------------------------------------------------------------
@@ -720,6 +754,31 @@ mixedTestBody =
          , "--"
          , subBoundaryValue
          , "--\r\n"
+         , "--"
+         , boundaryValue
+         , "--\r\n"
+         ]
+
+------------------------------------------------------------------------------
+rfc2231FileNameUtf8 :: ByteString
+rfc2231FileNameUtf8 = "\208\191\209\128\208\184\208\178\208\181\209\130 \
+                      \\228\184\150\231\149\140.txt"
+
+rfc2231FileName :: Text
+rfc2231FileName = "привет 世界.txt"
+
+rfc2231TestBody :: ByteString
+rfc2231TestBody =
+    S.concat
+         [ "--"
+         , boundaryValue
+         , crlf
+         , "Content-disposition: form-data; name=upload; filename*=UTF-8''"
+         , "%d0%bf%d1%80%d0%b8%d0%b2%d0%b5%d1%82+%e4%b8%96%e7%95%8c.txt\r\n"
+         , "Content-Type: text/plain\r\n"
+         , crlf
+         , file1Contents
+         , crlf
          , "--"
          , boundaryValue
          , "--\r\n"

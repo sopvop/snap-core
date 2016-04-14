@@ -47,11 +47,11 @@ module Snap.Internal.Util.FileUploads
   ) where
 
 ------------------------------------------------------------------------------
-import           Control.Applicative              (Alternative ((<|>)), Applicative ((*>), (<*), pure))
+import           Control.Applicative              (Alternative ((<|>)), Applicative (pure, (*>), (<*)))
 import           Control.Arrow                    (Arrow (first))
 import           Control.Exception.Lifted         (Exception, SomeException (..), bracket, catch, fromException, mask, throwIO, toException)
 import qualified Control.Exception.Lifted         as E (try)
-import           Control.Monad                    (Functor (fmap), Monad ((>>=), return), MonadPlus (mzero), guard, liftM, sequence, void, when, (>=>))
+import           Control.Monad                    (Functor (fmap), Monad (return, (>>=)), MonadPlus (mzero), guard, liftM, sequence, void, when, (>=>))
 import           Data.Attoparsec.ByteString.Char8 (Parser, isEndOfLine, string, takeWhile)
 import qualified Data.Attoparsec.ByteString.Char8 as Atto (try)
 import           Data.ByteString.Char8            (ByteString)
@@ -67,7 +67,7 @@ import qualified Data.Text                        as T (concat, pack, unpack)
 import qualified Data.Text.Encoding               as TE (decodeUtf8)
 import           Data.Typeable                    (Typeable, cast)
 import           Prelude                          (Bool (..), Double, Either (..), Eq (..), FilePath, IO, Ord (..), Show (..), String, const, either, flip, fst, id, max, not, otherwise, snd, ($), ($!), (.), (^), (||))
-import           Snap.Core                        (HasHeaders (headers), Headers, MonadSnap, Request (rqParams, rqPostParams), getHeader, getRequest, getTimeoutModifier, putRequest, runRequestBody)
+import           Snap.Core                        (HasHeaders (headers), Headers, MonadSnap, Request (rqParams, rqPostParams), getHeader, getRequest, getTimeoutModifier, putRequest, runRequestBody, urlDecode)
 import           Snap.Internal.Parsing            (crlf, fullyParse, pContentTypeWithParameters, pHeaders, pValueWithParameters)
 import qualified Snap.Types.Headers               as H (fromList)
 import           System.Directory                 (removeFile)
@@ -705,7 +705,15 @@ getFieldHeaderInfo hdrs = (fieldName, fileName, disposition)
 
     fieldName = fromMaybe "" $ findParam "name" dispositionParameters
 
-    fileName = findParam "filename" dispositionParameters
+    fileName = maybe fileNameCommon Just fileNameStar
+
+    fileNameCommon = findParam "filename" dispositionParameters
+
+    fileNameStar = case findParam "filename*" dispositionParameters of
+                     Nothing -> Nothing
+                     Just val -> if CI.mk (S.take 7 val) == "utf-8''"
+                                 then urlDecode (S.drop 7 val)
+                                 else Nothing
 
 
 ------------------------------------------------------------------------------
